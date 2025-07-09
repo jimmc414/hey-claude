@@ -1,0 +1,469 @@
+#!/usr/bin/env bash
+# Hey Claude - Ultralight CLI for Claude
+# Version: 1.0.0
+# 
+# A frictionless interface between your clipboard and Claude
+# Copy → Invoke → Response → Continue or Exit
+
+set -euo pipefail
+
+# ============================================================================
+# CONFIGURATION DEFAULTS
+# ============================================================================
+
+# Terminal settings
+DEFAULT_TERMINAL_SIZE="80x24"
+DEFAULT_TERMINAL_POSITION="center"
+
+# Colors (using ANSI escape codes for portability)
+COLOR_SYSTEM="\033[90m"      # Dim gray
+COLOR_RESPONSE="\033[97m"    # Bright white  
+COLOR_PROMPT="\033[94m"      # Light blue
+COLOR_ERROR="\033[91m"       # Light red
+COLOR_VOICE="\033[95m"       # Light purple
+COLOR_RESET="\033[0m"        # Reset
+
+# Behavior
+MAX_CLIPBOARD_SIZE=10240
+VOICE_MAX_DURATION=30
+VOICE_SILENCE_THRESHOLD=2
+STREAM_RESPONSE=true
+
+# Animation frames
+SPINNER_FRAMES=("◐" "◓" "◑" "◒")
+VOICE_FRAMES=("🎵" "♪" "♫")
+
+# Global state
+CLIPBOARD_TOOL=""
+TERMINAL_CMD=""
+HAS_VOICE=false
+CONTINUATION_MODE=false
+OPERATORS=()
+CLEAN_CONTENT=""
+
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+
+# Display error message and optionally exit
+error() {
+    local message="$1"
+    local exit_code="${2:-1}"
+    echo -e "${COLOR_ERROR}⚠️  ${message}${COLOR_RESET}" >&2
+    [[ "$exit_code" -ne 0 ]] && exit "$exit_code"
+}
+
+# Clean up on exit
+cleanup() {
+    # Reset colors
+    echo -en "${COLOR_RESET}"
+    
+    # Kill any child processes
+    jobs -p | xargs -r kill 2>/dev/null || true
+    
+    # Clear any temporary files (none in current implementation)
+    
+    # Show exit message if interrupted
+    if [[ "${INTERRUPTED:-false}" == "true" ]]; then
+        echo -e "\n${COLOR_SYSTEM}Interrupted. Goodbye!${COLOR_RESET}"
+    fi
+}
+
+# Show animated spinner
+show_spinner() {
+    local pid=$1
+    local frame=0
+    
+    while kill -0 "$pid" 2>/dev/null; do
+        echo -en "\r${COLOR_SYSTEM}${SPINNER_FRAMES[$frame]} Claude is thinking...${COLOR_RESET}"
+        frame=$(( (frame + 1) % ${#SPINNER_FRAMES[@]} ))
+        sleep 0.1
+    done
+    
+    # Clear the spinner line
+    echo -en "\r\033[K"
+}
+
+# ============================================================================
+# DETECTION FUNCTIONS
+# ============================================================================
+
+# Find available clipboard tool
+detect_clipboard_tool() {
+    # For testing, use mock clipboard first
+    if [[ -x "/mnt/c/python/hey_claude/mock_clipboard.sh" ]]; then
+        CLIPBOARD_TOOL="/mnt/c/python/hey_claude/mock_clipboard.sh -selection clipboard -o"
+        return 0
+    fi
+    
+    local tools=("xclip -selection clipboard -o" "xsel --clipboard --output" "wl-paste" "pbpaste")
+    
+    for tool_cmd in "${tools[@]}"; do
+        local tool_name="${tool_cmd%% *}"
+        if command -v "$tool_name" &>/dev/null; then
+            CLIPBOARD_TOOL="$tool_cmd"
+            return 0
+        fi
+    done
+    
+    error "No clipboard tool found\n      Install one of: xclip, xsel, wl-clipboard\n      Ubuntu/Debian: sudo apt install xclip"
+}
+
+# Find terminal emulator
+detect_terminal() {
+    # Check if already in a terminal
+    if [[ -t 0 && -t 1 && -t 2 ]] || [[ "${HEYCLAUDE_TEST_MODE:-}" == "1" ]]; then
+        # Already in terminal, will run directly
+        TERMINAL_CMD=""
+        return 0
+    fi
+    
+    # Check TERMINAL environment variable first
+    if [[ -n "${TERMINAL:-}" ]] && command -v "$TERMINAL" &>/dev/null; then
+        TERMINAL_CMD="$TERMINAL"
+        return 0
+    fi
+    
+    # Try common terminals in order
+    local terminals=("gnome-terminal" "konsole" "xterm" "alacritty" "kitty" "terminator")
+    
+    for term in "${terminals[@]}"; do
+        if command -v "$term" &>/dev/null; then
+            case "$term" in
+                gnome-terminal)
+                    TERMINAL_CMD="$term --geometry=$DEFAULT_TERMINAL_SIZE --title='Hey Claude' --"
+                    ;;
+                konsole)
+                    TERMINAL_CMD="$term --geometry=$DEFAULT_TERMINAL_SIZE --title='Hey Claude' -e"
+                    ;;
+                alacritty)
+                    TERMINAL_CMD="$term --title 'Hey Claude' -e"
+                    ;;
+                kitty)
+                    TERMINAL_CMD="$term --title='Hey Claude' --"
+                    ;;
+                xterm|terminator)
+                    TERMINAL_CMD="$term -geometry $DEFAULT_TERMINAL_SIZE -title 'Hey Claude' -e"
+                    ;;
+            esac
+            return 0
+        fi
+    done
+    
+    error "No terminal emulator found"
+}
+
+# Check for Claude CLI
+check_claude_cli() {
+    if ! command -v claude &>/dev/null; then
+        error "Claude CLI not installed\n      Run: npm install -g @anthropic-ai/claude\n      Or visit: anthropic.com/claude-cli"
+    fi
+}
+
+# Check for voice tools (optional)
+detect_voice_tools() {
+    # Audio capture
+    if command -v parecord &>/dev/null || command -v arecord &>/dev/null; then
+        # Transcription (simplified for now - would need whisper.cpp or system API)
+        HAS_VOICE=true
+    fi
+}
+
+# ============================================================================
+# CONFIGURATION FUNCTIONS
+# ============================================================================
+
+# Load configuration from file if exists
+load_config() {
+    local config_file="$HOME/.config/heyclaude/config"
+    
+    [[ ! -f "$config_file" ]] && return 0
+    
+    while IFS='=' read -r key value; do
+        # Skip comments and empty lines
+        [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+        
+        # Trim whitespace
+        key="${key// /}"
+        value="${value// /}"
+        
+        # Apply configuration
+        case "$key" in
+            terminal_size) DEFAULT_TERMINAL_SIZE="$value" ;;
+            terminal_position) DEFAULT_TERMINAL_POSITION="$value" ;;
+            max_clipboard_size) MAX_CLIPBOARD_SIZE="$value" ;;
+            color_system) COLOR_SYSTEM="$value" ;;
+            color_response) COLOR_RESPONSE="$value" ;;
+            color_prompt) COLOR_PROMPT="$value" ;;
+            color_error) COLOR_ERROR="$value" ;;
+            color_voice) COLOR_VOICE="$value" ;;
+            stream_response) STREAM_RESPONSE="$value" ;;
+            voice_max_duration) VOICE_MAX_DURATION="$value" ;;
+        esac
+    done < "$config_file"
+}
+
+# ============================================================================
+# INPUT FUNCTIONS
+# ============================================================================
+
+# Read clipboard content
+read_clipboard() {
+    local content
+    
+    # Try to read clipboard
+    if ! content=$(eval "$CLIPBOARD_TOOL" 2>/dev/null); then
+        error "Failed to read clipboard"
+    fi
+    
+    # Check if empty
+    if [[ -z "$content" ]]; then
+        error "📋 Nothing in clipboard. Copy some text first!" 0
+        return 1
+    fi
+    
+    # Check size
+    local size=${#content}
+    if [[ $size -gt $MAX_CLIPBOARD_SIZE ]]; then
+        error "Clipboard content too large (${size} bytes, max ${MAX_CLIPBOARD_SIZE})"
+    fi
+    
+    echo "$content"
+}
+
+# Extract operators from input
+extract_operators() {
+    local input="$1"
+    local remaining="$input"
+    
+    OPERATORS=()
+    
+    # Length operators
+    local length_pattern="^(brief:|short:|medium:|detailed:|essay:|max[[:space:]]+[0-9]+[[:space:]]+(words|lines|paragraphs):)"
+    
+    # Format operators  
+    local format_pattern="^(list:|steps:|tldr:|outline:|table:|json:|yaml:|markdown:)"
+    
+    # Code operators
+    local code_pattern="^(code[[:space:]]+only:|commented:|diff:|terminal:)"
+    
+    # Keep extracting operators while they match
+    while true; do
+        local matched=false
+        
+        # Check each pattern
+        for pattern in "$length_pattern" "$format_pattern" "$code_pattern"; do
+            if [[ "$remaining" =~ $pattern ]]; then
+                local op="${BASH_REMATCH[1]}"
+                # Normalize operator (remove trailing colon and spaces)
+                op="${op%:}"
+                op="${op// /_}"
+                OPERATORS+=("$op")
+                remaining="${remaining#${BASH_REMATCH[0]}}"
+                matched=true
+                break
+            fi
+        done
+        
+        [[ "$matched" == false ]] && break
+        
+        # Skip whitespace between operators
+        remaining="${remaining#"${remaining%%[![:space:]]*}"}"
+    done
+    
+    CLEAN_CONTENT="$remaining"
+}
+
+# Build enhanced prompt from operators
+build_prompt() {
+    local content="$1"
+    local prompt=""
+    
+    # Process operators into instructions
+    for op in "${OPERATORS[@]}"; do
+        case "$op" in
+            # Length operators
+            brief) prompt+="Please provide a brief response (1-2 sentences). " ;;
+            short) prompt+="Keep your response to one paragraph. " ;;
+            medium) prompt+="Provide a 2-3 paragraph response. " ;;
+            detailed) prompt+="Provide a comprehensive response. " ;;
+            essay) prompt+="Provide a long-form response. " ;;
+            max_*_words) 
+                local words="${op#max_}"
+                words="${words%_words}"
+                prompt+="Limit your response to ${words} words. "
+                ;;
+            max_*_lines)
+                local lines="${op#max_}"
+                lines="${lines%_lines}"
+                prompt+="Limit your response to ${lines} lines. "
+                ;;
+            
+            # Format operators
+            list) prompt+="Format your response as a bullet point list. " ;;
+            steps) prompt+="Format your response as numbered steps. " ;;
+            tldr) prompt+="Start with a TL;DR summary, then provide details. " ;;
+            outline) prompt+="Format as a hierarchical outline. " ;;
+            table) prompt+="Format your response as a table. " ;;
+            json) prompt+="Format your response as JSON. " ;;
+            yaml) prompt+="Format your response as YAML. " ;;
+            markdown) prompt+="Use rich markdown formatting. " ;;
+            
+            # Code operators
+            code_only) prompt+="Respond with only code, no explanations. " ;;
+            commented) prompt+="Include helpful inline comments in any code. " ;;
+            diff) prompt+="Show changes in diff/patch format. " ;;
+            terminal) prompt+="Format commands for direct copy-paste to terminal. " ;;
+        esac
+    done
+    
+    # Add user content
+    if [[ -n "$prompt" ]]; then
+        prompt+="\n\nUser request: $content"
+    else
+        prompt="$content"
+    fi
+    
+    echo "$prompt"
+}
+
+# ============================================================================
+# DISPLAY FUNCTIONS
+# ============================================================================
+
+# Show status message
+show_status() {
+    local message="$1"
+    echo -e "${COLOR_SYSTEM}${message}${COLOR_RESET}"
+}
+
+# Show continuation prompt and get input
+get_continuation_choice() {
+    echo -e "\n${COLOR_PROMPT}[SPACE to continue / ESC to exit]${COLOR_RESET}"
+    
+    # Save terminal settings and switch to raw mode
+    local old_settings=$(stty -g)
+    stty raw -echo
+    
+    local choice
+    while true; do
+        choice=$(dd bs=1 count=1 2>/dev/null)
+        case "$choice" in
+            " "|"c") # Space or 'c' to continue
+                stty "$old_settings"
+                echo  # New line after choice
+                return 0
+                ;;
+            $'\e'|"q") # ESC or 'q' to quit
+                stty "$old_settings"
+                echo  # New line after choice
+                return 1
+                ;;
+            *)
+                # Invalid input, continue loop
+                ;;
+        esac
+    done
+}
+
+# ============================================================================
+# MAIN FLOW
+# ============================================================================
+
+# Execute Claude with prompt
+run_claude() {
+    local prompt="$1"
+    local mode="$2"  # "initial" or "continue"
+    
+    if [[ "$mode" == "initial" ]]; then
+        # Show thinking indicator in background
+        (
+            sleep 0.1  # Small delay to let claude start
+            local frame=0
+            while true; do
+                echo -en "\r${COLOR_SYSTEM}${SPINNER_FRAMES[$frame]} Claude is thinking...${COLOR_RESET}"
+                frame=$(( (frame + 1) % ${#SPINNER_FRAMES[@]} ))
+                sleep 0.1
+            done
+        ) &
+        local spinner_pid=$!
+        
+        # Run Claude with initial prompt
+        echo -e "\r\033[K${COLOR_RESPONSE}"  # Clear spinner line and set response color
+        claude -p "$prompt"
+        local exit_code=$?
+        
+        # Kill spinner
+        kill $spinner_pid 2>/dev/null || true
+        wait $spinner_pid 2>/dev/null || true
+        
+        echo -en "${COLOR_RESET}"
+        return $exit_code
+    else
+        # Continue conversation
+        echo -e "${COLOR_RESPONSE}"
+        claude -c
+        local exit_code=$?
+        echo -en "${COLOR_RESET}"
+        return $exit_code
+    fi
+}
+
+# Main flow controller
+main() {
+    # Perform detections
+    detect_clipboard_tool
+    check_claude_cli
+    detect_terminal
+    detect_voice_tools
+    
+    # Load configuration
+    load_config
+    
+    # Read clipboard
+    local clipboard_content
+    if ! clipboard_content=$(read_clipboard); then
+        exit 0
+    fi
+    
+    # Extract operators and clean content
+    extract_operators "$clipboard_content"
+    
+    # Build enhanced prompt
+    local prompt=$(build_prompt "$CLEAN_CONTENT")
+    
+    # Run Claude with initial prompt
+    if ! run_claude "$prompt" "initial"; then
+        error "Claude command failed"
+    fi
+    
+    # Continuation loop
+    while true; do
+        if get_continuation_choice; then
+            # User wants to continue
+            if ! run_claude "" "continue"; then
+                error "Claude continuation failed"
+            fi
+        else
+            # User wants to exit
+            break
+        fi
+    done
+}
+
+# ============================================================================
+# ENTRY POINT
+# ============================================================================
+
+# Set up signal handlers
+trap cleanup EXIT
+trap 'INTERRUPTED=true; exit 130' INT TERM
+
+# Check if we need to launch in a new terminal
+if [[ -z "$TERMINAL_CMD" ]] || [[ -t 0 && -t 1 && -t 2 ]]; then
+    # Already in terminal or no terminal needed
+    main
+else
+    # Launch in new terminal
+    exec $TERMINAL_CMD "$0" "$@"
+fi
