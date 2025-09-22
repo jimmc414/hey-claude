@@ -149,8 +149,9 @@ detect_terminal() {
             return 0
         fi
     done
-    
-    error "No terminal emulator found"
+
+    TERMINAL_CMD=""
+    return 0
 }
 
 # Check for Claude CLI
@@ -414,7 +415,6 @@ main() {
     # Perform detections
     detect_clipboard_tool
     check_claude_cli
-    detect_terminal
     detect_voice_tools
     
     # Load configuration
@@ -459,11 +459,16 @@ main() {
 trap cleanup EXIT
 trap 'INTERRUPTED=true; exit 130' INT TERM
 
-# Check if we need to launch in a new terminal
-if [[ -z "$TERMINAL_CMD" ]] || [[ -t 0 && -t 1 && -t 2 ]]; then
-    # Already in terminal or no terminal needed
+# Determine terminal availability before choosing how to launch
+detect_terminal
+
+if [[ -t 0 && -t 1 && -t 2 ]] || [[ "${HEYCLAUDE_TEST_MODE:-}" == "1" ]]; then
+    # Running inside an interactive terminal already
     main
-else
-    # Launch in new terminal
+elif [[ -n "$TERMINAL_CMD" ]]; then
+    # Launch the script inside the detected terminal emulator
     exec $TERMINAL_CMD "$0" "$@"
+else
+    # No terminal available to launch the interactive experience
+    error "Unable to locate a terminal emulator. Run Hey Claude from a terminal or set the TERMINAL environment variable to your preferred launcher."
 fi
