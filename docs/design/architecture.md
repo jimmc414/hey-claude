@@ -174,7 +174,7 @@ Input Text → Operator Scanner → Operator Parser → Prompt Builder → Claud
 
 #### Operator Categories
 1. **Length Operators**: Control response size
-   - Pattern: `brief:|short:|medium:|detailed:|essay:|max \d+ (words|lines):`
+   - Pattern: `brief:|short:|medium:|detailed:|essay:|max \d+ (words|lines|paragraphs):`
    - Applied as: Prepended instructions to prompt
 
 2. **Format Operators**: Control response structure

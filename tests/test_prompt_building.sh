@@ -25,7 +25,12 @@ build_prompt() {
                 lines="${lines%_lines}"
                 prompt+="Limit your response to ${lines} lines. "
                 ;;
-            
+            max_*_paragraphs)
+                local paragraphs="${op#max_}"
+                paragraphs="${paragraphs%_paragraphs}"
+                prompt+="Limit your response to ${paragraphs} paragraphs. "
+                ;;
+
             # Format operators
             list) prompt+="Format your response as a bullet point list. " ;;
             steps) prompt+="Format your response as numbered steps. " ;;
@@ -93,6 +98,19 @@ echo -e "\nTest 5: Complex [max_30_words, list]"
 echo "Content: \"benefits of testing\""
 result=$(build_prompt "benefits of testing")
 echo "Result: \"$result\""
+
+# Test 6: Paragraph limit
+OPERATORS=("max_3_paragraphs")
+echo -e "\nTest 6: Paragraph limit [max_3_paragraphs]"
+echo "Content: \"outline project timeline\""
+result=$(build_prompt "outline project timeline")
+echo "Result: \"$result\""
+
+if [[ "$result" != *"Limit your response to 3 paragraphs."* ]]; then
+    echo "ERROR: Paragraph limit instruction missing."
+    printf 'Quoted prompt: %q\n' "$result"
+    exit 1
+fi
 
 # Verify that prompts with operators include actual line breaks
 line_count=$(printf '%s' "$result" | wc -l | tr -d '[:space:]')
