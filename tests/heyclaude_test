@@ -35,7 +35,7 @@ VOICE_FRAMES=("🎵" "♪" "♫")
 
 # Global state
 CLIPBOARD_TOOL=""
-TERMINAL_CMD=""
+TERMINAL_CMD=()
 HAS_VOICE=false
 CONTINUATION_MODE=false
 OPERATORS=()
@@ -114,14 +114,20 @@ detect_terminal() {
     # Check if already in a terminal
     if [[ -t 0 && -t 1 && -t 2 ]] || [[ "${HEYCLAUDE_TEST_MODE:-}" == "1" ]]; then
         # Already in terminal, will run directly
-        TERMINAL_CMD=""
+        TERMINAL_CMD=()
         return 0
     fi
-    
+
     # Check TERMINAL environment variable first
-    if [[ -n "${TERMINAL:-}" ]] && command -v "$TERMINAL" &>/dev/null; then
-        TERMINAL_CMD="$TERMINAL"
-        return 0
+    if [[ -n "${TERMINAL:-}" ]]; then
+        local terminal_words=()
+        # shellcheck disable=SC2086 # intentional evaluation for quoted args
+        if eval "terminal_words=($TERMINAL)"; then
+            if [[ ${#terminal_words[@]} -gt 0 ]] && command -v "${terminal_words[0]}" &>/dev/null; then
+                TERMINAL_CMD=("${terminal_words[@]}")
+                return 0
+            fi
+        fi
     fi
     
     # Try common terminals in order
@@ -131,26 +137,55 @@ detect_terminal() {
         if command -v "$term" &>/dev/null; then
             case "$term" in
                 gnome-terminal)
-                    TERMINAL_CMD="$term --geometry=$DEFAULT_TERMINAL_SIZE --title='Hey Claude' --"
+                    TERMINAL_CMD=(
+                        "$term"
+                        "--geometry=$DEFAULT_TERMINAL_SIZE"
+                        "--title"
+                        "Hey Claude"
+                        "--"
+                    )
                     ;;
                 konsole)
-                    TERMINAL_CMD="$term --geometry=$DEFAULT_TERMINAL_SIZE --title='Hey Claude' -e"
+                    TERMINAL_CMD=(
+                        "$term"
+                        "--geometry=$DEFAULT_TERMINAL_SIZE"
+                        "--title"
+                        "Hey Claude"
+                        "-e"
+                    )
                     ;;
                 alacritty)
-                    TERMINAL_CMD="$term --title 'Hey Claude' -e"
+                    TERMINAL_CMD=(
+                        "$term"
+                        "--title"
+                        "Hey Claude"
+                        "-e"
+                    )
                     ;;
                 kitty)
-                    TERMINAL_CMD="$term --title='Hey Claude' --"
+                    TERMINAL_CMD=(
+                        "$term"
+                        "--title"
+                        "Hey Claude"
+                        "--"
+                    )
                     ;;
                 xterm|terminator)
-                    TERMINAL_CMD="$term -geometry $DEFAULT_TERMINAL_SIZE -title 'Hey Claude' -e"
+                    TERMINAL_CMD=(
+                        "$term"
+                        "-geometry"
+                        "$DEFAULT_TERMINAL_SIZE"
+                        "-title"
+                        "Hey Claude"
+                        "-e"
+                    )
                     ;;
             esac
             return 0
         fi
     done
 
-    TERMINAL_CMD=""
+    TERMINAL_CMD=()
     return 0
 }
 
@@ -465,9 +500,9 @@ detect_terminal
 if [[ -t 0 && -t 1 && -t 2 ]] || [[ "${HEYCLAUDE_TEST_MODE:-}" == "1" ]]; then
     # Running inside an interactive terminal already
     main
-elif [[ -n "$TERMINAL_CMD" ]]; then
+elif (( ${#TERMINAL_CMD[@]} )); then
     # Launch the script inside the detected terminal emulator
-    exec $TERMINAL_CMD "$0" "$@"
+    exec "${TERMINAL_CMD[@]}" "$0" "$@"
 else
     # No terminal available to launch the interactive experience
     error "Unable to locate a terminal emulator. Run Hey Claude from a terminal or set the TERMINAL environment variable to your preferred launcher."

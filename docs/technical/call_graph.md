@@ -8,7 +8,7 @@ This document maps the function call hierarchy in the Hey Claude script, showing
 graph TD
     A[Script Entry Point] --> B{In Terminal?}
     B -->|Yes| C[main]
-    B -->|No| D[exec TERMINAL_CMD]
+    B -->|No| D[exec TERMINAL_CMD[@]]
     D --> A
     
     C --> E[detect_clipboard_tool]
@@ -51,7 +51,7 @@ graph TD
     │   └─ main() (line 385)
     │
     └─ ELSE launch in terminal
-        └─ exec $TERMINAL_CMD "$0" "$@"
+        └─ exec "${TERMINAL_CMD[@]}" "$0" "$@"
             └─ [Script restarts in terminal]
 ```
 

@@ -167,8 +167,8 @@ Function to find terminal emulator:
 Logic:
 1. If TERMINAL env var set, use it
 2. Otherwise try common terminals in order
-3. Build command with size and title flags
-4. Set global TERMINAL_CMD variable
+3. Build command array with size and title flags (no embedded quoting)
+4. Set global TERMINAL_CMD array variable
 ```
 
 #### 3.3 Claude CLI Detection
