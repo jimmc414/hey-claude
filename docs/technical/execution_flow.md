@@ -14,14 +14,16 @@ trap 'INTERRUPTED=true; exit 130' INT TERM
 
 ### 2. **Terminal Detection** (Lines 436-441)
 ```bash
-if [[ -z "$TERMINAL_CMD" ]] || [[ -t 0 && -t 1 && -t 2 ]]; then
+if [[ -t 0 && -t 1 && -t 2 ]]; then
     main
+elif (( ${#TERMINAL_CMD[@]} )); then
+    exec "${TERMINAL_CMD[@]}" "$0" "$@"
 else
-    exec $TERMINAL_CMD "$0" "$@"
+    error "Unable to locate a terminal emulator."
 fi
 ```
 - Checks if already running in a terminal
-- If not, launches itself in a new terminal window
+- If not, launches itself in a new terminal window when a command was detected
 
 ### 3. **Main Function Starts** (Line 385)
 The `main()` function orchestrates the entire flow:
