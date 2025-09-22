@@ -33,6 +33,7 @@
    - `list:` → [list]
    - `brief: list:` → [brief, list]
    - `max 50 words:` → [max_50_words]
+   - `max 3 paragraphs:` → [max_3_paragraphs]
    - `code only:` → [code_only]
    - Multiple chained operators work correctly
 
@@ -40,6 +41,7 @@
    Operators correctly transform into instructions:
    - `brief` → "Please provide a brief response (1-2 sentences)."
    - `list` → "Format your response as a bullet point list."
+   - `max_3_paragraphs` → "Limit your response to 3 paragraphs."
    - Multiple operators combine properly
 
 ### ✅ Error Handling

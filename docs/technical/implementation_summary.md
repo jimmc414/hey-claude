@@ -35,7 +35,7 @@ A single, self-contained bash script that implements all core features:
 - Zero-config default operation
 
 ✅ **Operators Implemented**
-- **Length**: brief, short, medium, detailed, essay, max N words/lines
+- **Length**: brief, short, medium, detailed, essay, max N words/lines/paragraphs
 - **Format**: list, steps, tldr, outline, table, json, yaml, markdown
 - **Code**: code only, commented, diff, terminal
 - Chainable operators (e.g., "brief: list:")

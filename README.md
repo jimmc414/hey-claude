@@ -64,6 +64,7 @@ Control Claude's response format by prefixing your clipboard content with operat
 - `medium:` - 2-3 paragraphs (default)
 - `detailed:` - Comprehensive response
 - `max 50 words:` - Word limit
+- `max 3 paragraphs:` - Paragraph limit
 
 #### Format Control
 - `list:` - Bullet point format
