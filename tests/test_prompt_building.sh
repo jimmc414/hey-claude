@@ -46,7 +46,8 @@ build_prompt() {
     
     # Add user content
     if [[ -n "$prompt" ]]; then
-        prompt+="\n\nUser request: $content"
+        prompt+=$'\n\nUser request: '
+        prompt+="$content"
     else
         prompt="$content"
     fi
@@ -92,3 +93,25 @@ echo -e "\nTest 5: Complex [max_30_words, list]"
 echo "Content: \"benefits of testing\""
 result=$(build_prompt "benefits of testing")
 echo "Result: \"$result\""
+
+# Verify that prompts with operators include actual line breaks
+line_count=$(printf '%s' "$result" | wc -l | tr -d '[:space:]')
+if [[ "$result" != *$'\n\nUser request: '* ]]; then
+    echo "ERROR: Prompt is missing expected newline-separated user request section."
+    printf 'Quoted prompt: %q\n' "$result"
+    exit 1
+fi
+
+if [[ "$result" == *\\n\\nUser\ request:* ]]; then
+    echo "ERROR: Prompt still contains escaped newline sequences."
+    printf 'Quoted prompt: %q\n' "$result"
+    exit 1
+fi
+
+if (( line_count < 2 )); then
+    echo "ERROR: Expected prompt to span multiple lines, but only counted $line_count line(s)."
+    printf 'Quoted prompt: %q\n' "$result"
+    exit 1
+fi
+
+printf 'Line break check passed. Prompt representation: %q\n' "$result"
