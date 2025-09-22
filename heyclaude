@@ -351,7 +351,8 @@ build_prompt() {
     
     # Add user content
     if [[ -n "$prompt" ]]; then
-        prompt+="\n\nUser request: $content"
+        prompt+=$'\n\nUser request: '
+        prompt+="$content"
     else
         prompt="$content"
     fi
